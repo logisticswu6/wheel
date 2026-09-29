@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>幸運轉盤 1–20</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#f3efe6;--ink:#1d2a44;--muted:#6b7488;--card:#fffdf8;--accent:#e2472f;--line:#d9d2c2}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141a2b;--ink:#f1ece0;--muted:#98a2b8;--card:#1d2540;--accent:#ff6a4d;--line:#2f3a5c}}
+:root[data-theme="dark"]{--bg:#141a2b;--ink:#f1ece0;--muted:#98a2b8;--card:#1d2540;--accent:#ff6a4d;--line:#2f3a5c}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;padding:24px 16px 40px;gap:20px}
+h1{margin:0;font-size:1.6rem;font-weight:800;letter-spacing:.04em}
+.stage{position:relative;width:min(88vw,460px);aspect-ratio:1}
+canvas{width:100%;height:100%;display:block;border-radius:50%;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+.pointer{position:absolute;top:-10px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:16px solid transparent;border-right:16px solid transparent;border-top:34px solid var(--accent);filter:drop-shadow(0 3px 2px rgba(0,0,0,.35));z-index:2}
+.hub{position:absolute;inset:0;margin:auto;width:22%;aspect-ratio:1;border-radius:50%;border:none;background:var(--accent);color:#fff;font-size:1.15rem;font-weight:800;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.35);z-index:2}
+.hub:disabled{opacity:.7;cursor:not-allowed}
+.hub:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+.result{min-height:5.5rem;text-align:center}
+.result .n{font-size:4rem;font-weight:900;line-height:1;color:var(--accent)}
+.result .t{color:var(--muted);margin-top:6px}
+.history{max-width:460px;width:100%;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.history h2{margin:0 0 8px;font-size:1rem}
+.history .list{display:flex;flex-wrap:wrap;gap:6px;min-height:28px;color:var(--muted)}
+.chip{background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:2px 10px;font-weight:700;color:var(--ink)}
+.opts{display:flex;gap:16px;align-items:center;flex-wrap:wrap;justify-content:center;color:var(--muted);font-size:.95rem}
+.opts button{background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:6px 12px;cursor:pointer;font:inherit}
+@media (prefers-reduced-motion:reduce){canvas{transition-duration:.01s !important}}
+</style>
+</head>
+<body>
+<h1>幸運轉盤</h1>
+<div class="stage">
+  <div class="pointer"></div>
+  <canvas id="wheel" width="920" height="920" aria-label="轉盤 1 到 20"></canvas>
+  <button class="hub" id="spin">開始</button>
+</div>
+<div class="result" aria-live="polite">
+  <div class="n" id="num">?</div>
+  <div class="t" id="msg">按下中間的按鈕開始抽取</div>
+</div>
+<div class="opts">
+  <label><input type="checkbox" id="noRepeat"> 不重複抽取</label>
+  <label><input type="checkbox" id="mute"> 靜音</label>
+  <button id="reset">清除紀錄</button>
+</div>
+<div class="history"><h2>抽取紀錄</h2><div class="list" id="hist">尚無紀錄</div></div>
+
+<script>
+(function(){
+  var N=20, canvas=document.getElementById('wheel'), ctx=canvas.getContext('2d');
+  var size=canvas.width, c=size/2, r=c-6, slice=2*Math.PI/N;
+  var colors=['#e2472f','#f0a92e','#2f9e8f','#3b5bdb','#8e44ad'];
+  var rotation=0, spinning=false, picked=[];
+
+  function draw(){
+    ctx.clearRect(0,0,size,size);
+    for(var i=0;i<N;i++){
+      var a0=-Math.PI/2-slice/2+i*slice, a1=a0+slice;
+      ctx.beginPath();ctx.moveTo(c,c);ctx.arc(c,c,r,a0,a1);ctx.closePath();
+      var col=colors[i%colors.length];
+      if(i===N-1&&N%colors.length===1)col='#555';
+      ctx.fillStyle=col;ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,.85)';ctx.lineWidth=3;ctx.stroke();
+      ctx.save();ctx.translate(c,c);ctx.rotate(a0+slice/2);
+      ctx.fillStyle='#fff';ctx.font='800 44px system-ui,sans-serif';
+      ctx.textAlign='right';ctx.textBaseline='middle';
+      ctx.fillText(String(i+1),r-34,0);ctx.restore();
+    }
+    ctx.beginPath();ctx.arc(c,c,r,0,2*Math.PI);ctx.strokeStyle='rgba(255,255,255,.9)';ctx.lineWidth=8;ctx.stroke();
+  }
+  draw();
+
+  var btn=document.getElementById('spin'), num=document.getElementById('num'),
+      msg=document.getElementById('msg'), hist=document.getElementById('hist'),
+      noRepeat=document.getElementById('noRepeat');
+  var muteBox=document.getElementById('mute'), actx=null, lastTick=0;
+  function ensureAudio(){
+    try{
+      if(!actx){var AC=window.AudioContext||window.webkitAudioContext;if(AC)actx=new AC();}
+      if(actx&&actx.state==='suspended')actx.resume();
+    }catch(e){}
+  }
+  function blip(freq,dur,type,vol,when){
+    if(!actx||muteBox.checked)return;
+    var t=actx.currentTime+(when||0), o=actx.createOscillator(), g=actx.createGain();
+    o.type=type;o.frequency.setValueAtTime(freq,t);
+    g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+    o.connect(g);g.connect(actx.destination);o.start(t);o.stop(t+dur+0.02);
+  }
+  function tick(){
+    var now=performance.now();if(now-lastTick<30)return;lastTick=now;
+    blip(1100,0.05,'square',0.06);
+  }
+  function fanfare(){
+    [523.25,659.25,783.99,1046.5].forEach(function(f,i){blip(f,0.35,'triangle',0.18,i*0.12);});
+    blip(1318.5,0.6,'triangle',0.16,0.5);
+  }
+  function ease(t){return 1-Math.pow(1-t,4);}
+
+  function renderHist(){
+    hist.innerHTML='';
+    if(!picked.length){hist.textContent='尚無紀錄';return;}
+    picked.forEach(function(v){var s=document.createElement('span');s.className='chip';s.textContent=v;hist.appendChild(s);});
+  }
+
+  function spin(){
+    if(spinning)return;
+    var pool=[];
+    for(var i=1;i<=N;i++){if(!noRepeat.checked||picked.indexOf(i)<0)pool.push(i);}
+    if(!pool.length){msg.textContent='20 個數字都抽完了，請按「清除紀錄」';return;}
+    var result=pool[Math.floor(Math.random()*pool.length)];
+    var idx=result-1;
+    // 指針在頂端；第 idx 格中心位於 idx*slice，需轉到 0 度
+    var jitter=(Math.random()-.5)*slice*.7;
+    var target=-(idx*slice+jitter);
+    var cur=((rotation%(2*Math.PI))+2*Math.PI)%(2*Math.PI);
+    var base=rotation-cur;
+    var next=base+2*Math.PI*6+((target%(2*Math.PI))+2*Math.PI)%(2*Math.PI);
+    if(next<=rotation)next+=2*Math.PI;
+    ensureAudio();
+    spinning=true;btn.disabled=true;num.textContent='…';msg.textContent='轉動中';
+    var start=rotation, dur=5000, t0=null;
+    var lastIdx=Math.floor(start/slice+0.5);
+    function frame(ts){
+      if(t0===null)t0=ts;
+      var p=Math.min((ts-t0)/dur,1);
+      var rot=start+(next-start)*ease(p);
+      canvas.style.transform='rotate('+rot+'rad)';
+      var k=Math.floor(rot/slice+0.5);
+      if(k!==lastIdx){lastIdx=k;tick();}
+      if(p<1){requestAnimationFrame(frame);}
+      else{
+        rotation=next;spinning=false;btn.disabled=false;
+        num.textContent=result;msg.textContent='抽到了 '+result+' 號';
+        picked.push(result);renderHist();fanfare();
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+
+  btn.addEventListener('click',spin);
+  document.getElementById('reset').addEventListener('click',function(){
+    if(spinning)return;picked=[];renderHist();num.textContent='?';msg.textContent='按下中間的按鈕開始抽取';
+  });
+})();
+</script>
+</body>
+</html>
